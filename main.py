@@ -78,16 +78,15 @@ def main() -> None:
         base, ext = os.path.splitext(args.input)
         output = f"{base}_commented{ext or '.mp4'}"
 
-    # Validate API credentials
+    # Validate Azure OpenAI credentials
     azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
     azure_key = os.getenv("AZURE_OPENAI_KEY", "").strip()
-    openai_key = os.getenv("OPENAI_API_KEY", "").strip()
 
-    if not ((azure_endpoint and azure_key) or openai_key):
+    if not (azure_endpoint and azure_key):
         print(
-            "[ERROR] No API credentials found.\n"
-            "Set OPENAI_API_KEY in a .env file (see .env.example), or\n"
-            "set AZURE_OPENAI_ENDPOINT + AZURE_OPENAI_KEY for Azure OpenAI.",
+            "[ERROR] Azure OpenAI credentials not found.\n"
+            "Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_KEY in a .env file\n"
+            "(see .env.example).",
             file=sys.stderr,
         )
         sys.exit(1)

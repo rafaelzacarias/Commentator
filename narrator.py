@@ -5,10 +5,9 @@ from __future__ import annotations
 import base64
 import logging
 import os
-from pathlib import Path
 from typing import Optional
 
-from openai import AzureOpenAI, OpenAI
+from openai import AzureOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -25,51 +24,31 @@ Guidelines:
 """
 
 
-def _build_chat_client() -> tuple[OpenAI | AzureOpenAI, str]:
-    """Return a chat client and model name based on environment variables.
+def _build_chat_client() -> tuple[AzureOpenAI, str]:
+    """Return an Azure OpenAI chat client and deployment name.
 
-    Azure OpenAI takes priority when both ``AZURE_OPENAI_ENDPOINT`` and
-    ``AZURE_OPENAI_KEY`` are set; otherwise falls back to the standard
-    OpenAI API.
+    Requires ``AZURE_OPENAI_ENDPOINT`` and ``AZURE_OPENAI_KEY`` to be set.
     """
-    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
-    azure_key = os.getenv("AZURE_OPENAI_KEY", "").strip()
-
-    if azure_endpoint and azure_key:
-        client: OpenAI | AzureOpenAI = AzureOpenAI(
-            azure_endpoint=azure_endpoint,
-            api_key=azure_key,
-            api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
-        )
-        model = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.4-mini")
-    else:
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
-        model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
-
+    client = AzureOpenAI(
+        azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+        api_key=os.environ["AZURE_OPENAI_KEY"],
+        api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
+    )
+    model = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.4-mini")
     return client, model
 
 
-def _build_tts_client() -> tuple[OpenAI | AzureOpenAI, str]:
-    """Return a TTS client and model name based on environment variables.
+def _build_tts_client() -> tuple[AzureOpenAI, str]:
+    """Return an Azure OpenAI TTS client and deployment name.
 
-    Uses ``AZURE_TTS_DEPLOYMENT`` (Azure) or ``TTS_MODEL`` (OpenAI) to
-    select the speech synthesis model.  Falls back to the same client
-    credentials used for chat.
+    Uses ``AZURE_TTS_DEPLOYMENT`` to select the speech synthesis deployment.
     """
-    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
-    azure_key = os.getenv("AZURE_OPENAI_KEY", "").strip()
-
-    if azure_endpoint and azure_key:
-        client: OpenAI | AzureOpenAI = AzureOpenAI(
-            azure_endpoint=azure_endpoint,
-            api_key=azure_key,
-            api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
-        )
-        model = os.getenv("AZURE_TTS_DEPLOYMENT", "tts")
-    else:
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
-        model = os.getenv("TTS_MODEL", "tts-1")
-
+    client = AzureOpenAI(
+        azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+        api_key=os.environ["AZURE_OPENAI_KEY"],
+        api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
+    )
+    model = os.getenv("AZURE_TTS_DEPLOYMENT", "tts")
     return client, model
 
 

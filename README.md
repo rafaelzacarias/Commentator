@@ -6,7 +6,7 @@ An AI-powered video narrator that reads a video file and produces a new version 
 
 1. **Frame extraction** – ffmpeg pulls one frame from the video every N seconds.
 2. **Vision commentary** – Each frame is sent to a GPT model (with vision support, e.g. `gpt-5.4-mini`) which returns a 1–2 sentence description of the scene.
-3. **Text-to-speech** – The commentary text is converted to speech via the OpenAI TTS API (voice `onyx` by default).
+3. **Text-to-speech** – The commentary text is converted to speech via the Azure OpenAI TTS deployment (voice `onyx` by default).
 4. **Audio mixing** – ffmpeg overlays the speech clips on top of the original audio at the correct timestamps and re-encodes the audio track.
 5. **Output** – The final video file has the same video track as the input but with the mixed audio (original + AI narrator).
 
@@ -16,7 +16,7 @@ An AI-powered video narrator that reads a video file and produces a new version 
 |---|---|
 | Python 3.10+ | |
 | [ffmpeg](https://ffmpeg.org/download.html) | Must be on `PATH` (`ffmpeg` and `ffprobe` commands) |
-| OpenAI API key **or** Azure OpenAI credentials | See configuration below |
+| Azure OpenAI credentials | Endpoint + key (see configuration below) |
 
 ## Installation
 
@@ -41,15 +41,7 @@ cp .env.example .env
 
 Copy `.env.example` to `.env` and fill in the values:
 
-### Option A – OpenAI directly
-
-```dotenv
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-5.4-mini    # vision-capable model
-TTS_MODEL=tts-1               # or tts-1-hd for higher quality
-```
-
-### Option B – Azure OpenAI (takes priority when both endpoint and key are set)
+### Azure OpenAI (required)
 
 ```dotenv
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
