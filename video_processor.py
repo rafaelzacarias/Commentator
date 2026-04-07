@@ -84,6 +84,58 @@ def extract_frame(video_path: str, timestamp: float, output_path: str) -> bool:
     return result.returncode == 0 and os.path.exists(output_path)
 
 
+def extract_frames(
+    video_path: str,
+    start_time: float,
+    end_time: float,
+    output_dir: str,
+    prefix: str = "seq",
+    max_frames: int = 6,
+) -> list[str]:
+    """Extract multiple evenly-spaced JPEG frames between *start_time* and *end_time*.
+
+    Parameters
+    ----------
+    video_path:
+        Path to the input video file.
+    start_time:
+        Start of the time range (seconds, inclusive).
+    end_time:
+        End of the time range (seconds, inclusive).
+    output_dir:
+        Directory where the JPEG files will be written.
+    prefix:
+        Filename prefix for the extracted frame files.
+    max_frames:
+        Maximum number of frames to extract from the range.  Defaults to 6.
+
+    Returns
+    -------
+    list[str]
+        Paths to the successfully extracted JPEG files, in chronological order.
+    """
+    duration = end_time - start_time
+    if duration <= 0:
+        # Fall back to a single frame at end_time
+        path = os.path.join(output_dir, f"{prefix}_0000.jpg")
+        if extract_frame(video_path, end_time, path):
+            return [path]
+        return []
+
+    # Determine how many frames to sample (at least 2: start and end)
+    n_frames = min(max_frames, max(2, int(duration // 2) + 1))
+    step = duration / (n_frames - 1) if n_frames > 1 else 0
+
+    paths: list[str] = []
+    for i in range(n_frames):
+        ts = start_time + i * step
+        path = os.path.join(output_dir, f"{prefix}_{i:04d}.jpg")
+        if extract_frame(video_path, ts, path):
+            paths.append(path)
+
+    return paths
+
+
 def mix_video_audio(
     video_path: str,
     commentary_clips: list[tuple[float, str]],
@@ -219,15 +271,22 @@ def process_video(
         for idx, ts in enumerate(timestamps):
             print(f"  [{idx + 1}/{len(timestamps)}] {ts}s", end="", flush=True)
 
-            # Extract frame
-            frame_path = os.path.join(tmpdir, f"frame_{idx:04d}.jpg")
-            if not extract_frame(input_path, ts, frame_path):
+            # Extract a sequence of frames from the previous timestamp to now
+            prev_ts = timestamps[idx - 1] if idx > 0 else max(0, ts - interval)
+            frame_paths = extract_frames(
+                input_path,
+                start_time=prev_ts,
+                end_time=ts,
+                output_dir=tmpdir,
+                prefix=f"seq_{idx:04d}",
+            )
+            if not frame_paths:
                 print(" ⚠️  frame extraction failed – skipping")
                 continue
 
             # Generate commentary text
             try:
-                text = get_commentary(frame_path, ts, previous_comments)
+                text = get_commentary(frame_paths, ts, previous_comments)
             except Exception as exc:
                 print(f" ⚠️  commentary failed: {exc}")
                 continue
