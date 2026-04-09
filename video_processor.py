@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 from typing import Optional
 
-from narrator import get_commentary, text_to_speech
+from narrator import COMMENTARY_LEVELS, get_commentary, text_to_speech
 
 logger = logging.getLogger(__name__)
 
@@ -90,9 +91,9 @@ def extract_frames(
     end_time: float,
     output_dir: str,
     prefix: str = "seq",
-    max_frames: int = 6,
+    fps: float | None = None,
 ) -> list[str]:
-    """Extract multiple evenly-spaced JPEG frames between *start_time* and *end_time*.
+    """Extract JPEG frames between *start_time* and *end_time* at a given FPS.
 
     Parameters
     ----------
@@ -106,14 +107,18 @@ def extract_frames(
         Directory where the JPEG files will be written.
     prefix:
         Filename prefix for the extracted frame files.
-    max_frames:
-        Maximum number of frames to extract from the range.  Defaults to 6.
+    fps:
+        Frames per second to sample.  Defaults to ``FRAME_SAMPLE_FPS`` env
+        var (fallback: 2).
 
     Returns
     -------
     list[str]
         Paths to the successfully extracted JPEG files, in chronological order.
     """
+    if fps is None:
+        fps = float(os.getenv("FRAME_SAMPLE_FPS", "2"))
+
     duration = end_time - start_time
     if duration <= 0:
         # Fall back to a single frame at end_time
@@ -122,9 +127,9 @@ def extract_frames(
             return [path]
         return []
 
-    # Determine how many frames to sample (at least 2: start and end)
-    n_frames = min(max_frames, max(2, int(duration // 2) + 1))
-    step = duration / (n_frames - 1) if n_frames > 1 else 0
+    # Number of frames based on requested FPS (at least 1)
+    n_frames = max(1, int(round(duration * fps)))
+    step = duration / n_frames
 
     paths: list[str] = []
     for i in range(n_frames):
@@ -229,14 +234,23 @@ def mix_video_audio(
 def process_video(
     input_path: str,
     output_path: str,
-    interval: int = 10,
+    interval: int = 3,
     voice: str = "onyx",
+    commentary_level: str = "normal",
 ) -> None:
-    """Process a video: generate AI commentary and mix it into the audio track.
+    """Process a video: scan frequently, generate AI commentary, mix audio.
 
-    For every *interval* seconds of video a frame is extracted, sent to the
-    vision LLM for commentary, converted to speech, and mixed with the
-    original audio before writing the final output video.
+    Frames are sampled every *interval* seconds (default 3) to catch events
+    like goals as soon as they happen.  The LLM classifies each moment as
+    ``critical``, ``notable``, or ``minor`` and the *commentary_level*
+    setting decides which classes actually produce spoken commentary:
+
+    - ``"important"`` — only ``critical`` events (goals, penalties, red cards)
+    - ``"normal"``    — ``critical`` + ``notable`` (saves, fouls, fast breaks)
+    - ``"all"``       — everything the LLM deems worth mentioning
+
+    The LLM may also output ``[SKIP]`` when nothing new is happening,
+    regardless of the level.  Critical events always bypass any gap cooldown.
 
     Parameters
     ----------
@@ -245,33 +259,58 @@ def process_video(
     output_path:
         Destination path for the output video file.
     interval:
-        How often (in seconds) to generate a commentary clip. Defaults to 10.
+        How often (in seconds) to sample frames for analysis. Defaults to 3.
+        This is the *scan* cadence, NOT the commentary cadence.
     voice:
-        TTS voice to use.  Defaults to ``"onyx"``.
+        TTS voice to use (OpenAI backend).
+    commentary_level:
+        One of ``"important"``, ``"normal"``, ``"all"``.
     """
+    allowed = COMMENTARY_LEVELS.get(commentary_level, COMMENTARY_LEVELS["normal"])
+
+    # Minimum seconds between non-critical comments to avoid constant talking.
+    min_gap = int(os.getenv("MIN_COMMENT_GAP", "8"))
+
+    # Optionally persist extracted frames and audio clips for debugging.
+    keep_files = os.getenv("KEEP_LOCAL_FILES", "false").lower().strip() in ("1", "true", "yes")
+    debug_dir: str | None = None
+    if keep_files:
+        base_name = os.path.splitext(os.path.basename(input_path))[0]
+        debug_dir = os.path.join(os.path.dirname(input_path) or ".", f"{base_name}_debug")
+        os.makedirs(debug_dir, exist_ok=True)
+        # Sub-directories for frames and audio
+        os.makedirs(os.path.join(debug_dir, "frames"), exist_ok=True)
+        os.makedirs(os.path.join(debug_dir, "audio"), exist_ok=True)
+        print(f"   Debug output     : {debug_dir}")
+
     print(f"📹 Analyzing video: {input_path}")
 
     info = get_video_info(input_path)
     duration = float(info["format"]["duration"])
     audio_present = has_audio_stream(info)
 
-    print(f"   Duration     : {duration:.1f}s")
-    print(f"   Audio stream : {'yes' if audio_present else 'no'}")
-    print(f"   Interval     : {interval}s")
+    print(f"   Duration          : {duration:.1f}s")
+    print(f"   Audio stream      : {'yes' if audio_present else 'no'}")
+    print(f"   Scan interval     : {interval}s")
+    print(f"   Commentary level  : {commentary_level} → {sorted(allowed)}")
+    print(f"   Min comment gap   : {min_gap}s (critical events bypass)")
 
-    # Build list of timestamps (skip the very end to avoid empty frames)
+    # Build scan timestamps (never look ahead, process sequentially)
     timestamps = [ts for ts in range(0, int(duration), interval) if ts < duration - 1]
 
-    print(f"\n🎙️  Generating {len(timestamps)} commentary clip(s)…\n")
+    print(f"\n🎙️  Scanning {len(timestamps)} checkpoint(s)…\n")
 
     commentary_clips: list[tuple[float, str]] = []
     previous_comments: list[str] = []
+    last_comment_ts: float = -999.0  # timestamp of last spoken comment
 
     with tempfile.TemporaryDirectory() as tmpdir:
         for idx, ts in enumerate(timestamps):
-            print(f"  [{idx + 1}/{len(timestamps)}] {ts}s", end="", flush=True)
+            ts_f = float(ts)
+            label = f"  [{idx + 1}/{len(timestamps)}] {ts}s"
+            print(label, end="", flush=True)
 
-            # Extract a sequence of frames from the previous timestamp to now
+            # Extract frame sequence from previous scan point to now
             prev_ts = timestamps[idx - 1] if idx > 0 else max(0, ts - interval)
             frame_paths = extract_frames(
                 input_path,
@@ -284,25 +323,64 @@ def process_video(
                 print(" ⚠️  frame extraction failed – skipping")
                 continue
 
-            # Generate commentary text
+            # Save frames locally if requested
+            if debug_dir:
+                def _ts_label(s: float) -> str:
+                    m, sec = divmod(int(s), 60)
+                    return f"{m:02d}m{sec:02d}s"
+
+                range_label = f"{_ts_label(prev_ts)}-{_ts_label(ts)}"
+                for i, fp in enumerate(frame_paths, 1):
+                    dest = os.path.join(
+                        debug_dir, "frames",
+                        f"{range_label}_frame{i}of{len(frame_paths)}.jpg",
+                    )
+                    shutil.copy2(fp, dest)
+
+            # Ask the LLM to classify and comment
             try:
-                text = get_commentary(frame_paths, ts, previous_comments)
+                importance, style, text = get_commentary(
+                    frame_paths, ts_f, previous_comments,
+                )
             except Exception as exc:
-                print(f" ⚠️  commentary failed: {exc}")
+                print(f" ⚠️  LLM failed: {exc}")
                 continue
 
-            print(f"\n     💬 {text}")
+            # LLM decided nothing worth saying
+            if importance is None or not text:
+                print("  — [SKIP]")
+                continue
+
+            # Filter by commentary level
+            if importance not in allowed:
+                print(f"  — [{importance}] filtered out at level '{commentary_level}'")
+                continue
+
+            # Enforce minimum gap between comments (critical events bypass)
+            gap = ts_f - last_comment_ts
+            if importance != "critical" and gap < min_gap:
+                print(f"  — [{importance}] too soon ({gap:.0f}s < {min_gap}s gap)")
+                continue
+
+            print(f"\n     🔥 [{importance}] [{style}] {text}")
             previous_comments.append(text)
 
             # Convert to speech
             audio_path = os.path.join(tmpdir, f"speech_{idx:04d}.mp3")
             try:
-                text_to_speech(text, audio_path, voice=voice)
+                text_to_speech(text, audio_path, voice=voice, style=style)
             except Exception as exc:
                 print(f"     ⚠️  TTS failed: {exc}")
                 continue
 
-            commentary_clips.append((float(ts), audio_path))
+            commentary_clips.append((ts_f, audio_path))
+            last_comment_ts = ts_f
+
+            # Save audio clip locally if requested
+            if debug_dir:
+                m, sec = divmod(int(ts), 60)
+                dest = os.path.join(debug_dir, "audio", f"{m:02d}m{sec:02d}s_speech.mp3")
+                shutil.copy2(audio_path, dest)
 
         if not commentary_clips:
             print("\n⚠️  No commentary clips were generated. Copying video as-is.")
@@ -312,7 +390,7 @@ def process_video(
             )
             return
 
-        print(f"\n🎬 Mixing audio and encoding output video…")
+        print(f"\n🎬 Mixing {len(commentary_clips)} clip(s) into output video…")
         mix_video_audio(
             input_path,
             commentary_clips,

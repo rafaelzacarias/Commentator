@@ -23,8 +23,9 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 # Configuration (can be overridden via environment variables or .env)
 # ---------------------------------------------------------------------------
-COMMENTARY_INTERVAL: int = int(os.getenv("COMMENTARY_INTERVAL", "10"))
+COMMENTARY_INTERVAL: int = int(os.getenv("SCAN_INTERVAL", os.getenv("COMMENTARY_INTERVAL", "3")))
 TTS_VOICE: str = os.getenv("TTS_VOICE", "onyx")
+COMMENTARY_LEVEL: str = os.getenv("COMMENTARY_LEVEL", "normal")
 
 
 def main() -> None:
@@ -56,13 +57,27 @@ def main() -> None:
         "--interval",
         type=int,
         default=COMMENTARY_INTERVAL,
-        help=f"How often (in seconds) to generate a commentary clip (default: {COMMENTARY_INTERVAL}).",
+        help=f"How often (in seconds) to scan frames for events (default: {COMMENTARY_INTERVAL}).",
     )
     parser.add_argument(
         "--voice",
         default=TTS_VOICE,
-        choices=["alloy", "echo", "fable", "onyx", "nova", "shimmer"],
-        help=f"TTS voice to use for narration (default: {TTS_VOICE}).",
+        help=(
+            f"TTS voice (default: {TTS_VOICE}). "
+            "For OpenAI backend: alloy, echo, fable, onyx, nova, shimmer. "
+            "For Azure Speech backend: e.g. en-US-JasonNeural (set via AZURE_SPEECH_VOICE)."
+        ),
+    )
+    parser.add_argument(
+        "--level",
+        default=COMMENTARY_LEVEL,
+        choices=["important", "normal", "all"],
+        help=(
+            f"Commentary verbosity level (default: {COMMENTARY_LEVEL}). "
+            "'important' = goals/penalties only. "
+            "'normal' = goals + notable plays. "
+            "'all' = everything worth mentioning."
+        ),
     )
 
     args = parser.parse_args()
@@ -100,6 +115,7 @@ def main() -> None:
             output_path=output,
             interval=args.interval,
             voice=args.voice,
+            commentary_level=args.level,
         )
     except KeyboardInterrupt:
         print("\n\n👋 Interrupted by user.")
